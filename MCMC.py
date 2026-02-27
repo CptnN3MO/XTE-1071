@@ -661,23 +661,26 @@ def plot_3d_evolution(df: pd.DataFrame, outpath: Path, zcols: list, steps_per_tr
     # Build plot and frames data: each frame must supply updated 'z' for each trace
     fig = go.Figure(data=traces)
     plot_frames = []
+    Mvals_sorted = np.sort(df["M"].unique())
+    Rvals_sorted = np.sort(df["R"].unique())
     for idx, Zt in enumerate(frames):
         data = []
-        k = 0
-        for D in sorted(df["D"].unique()):
-            sub = df[df["D"] == D].copy()
-            Mvals_local = np.sort(sub["M"].unique())
-            Rvals_local = np.sort(sub["R"].unique())
+        # build full Scatter3d traces for this frame in the same order as `traces`/`trace_meta`
+        for ti, meta in enumerate(trace_meta):
+            Dmeta, typ, ind = meta
+            orig = traces[ti]
+            if typ == "MR":
+                xs = np.full(len(Rvals_sorted), Mvals_sorted[ind])
+                ys = Rvals_sorted
+                zs = Zt[ind, :]
+            else:
+                xs = Mvals_sorted
+                ys = np.full(len(Mvals_sorted), Rvals_sorted[ind])
+                zs = Zt[:, ind]
 
-            for i in range(len(Mvals_local)):
-                zs = Zt[i, :]
-                data.append(dict(z=zs))
-                k += 1
-
-            for j in range(len(Rvals_local)):
-                zs = Zt[:, j]
-                data.append(dict(z=zs))
-                k += 1
+            trace = go.Scatter3d(x=xs, y=ys, z=zs, mode="lines",
+                                 line=orig.line, name=orig.name, showlegend=orig.showlegend)
+            data.append(trace)
 
         plot_frames.append(go.Frame(data=data, name=str(idx), layout=dict(title=f"{title} (t={spec_times[idx]:.2f})")))
 
@@ -818,6 +821,17 @@ def main() -> None:
                 print(f"[OK] Wrote {interactive_path}")
             except ImportError as e:
                 print(f"[WARN] Could not create interactive plot: {e}")
+
+    # Optional animation across spectra
+    if args.animate:
+        zcols = [f"kT_g{grp}_eV" for grp in [1, 2, 3, 4, 5]]
+        anim_path = d3_dir / "grid_3d_evolution.html"
+        try:
+            plot_3d_evolution(df, anim_path, zcols=zcols, steps_per_transition=args.anim_steps,
+                              title="XTE J1701-462 - time evolution")
+            print(f"[OK] Wrote {anim_path}")
+        except ImportError as e:
+            print(f"[WARN] Could not create animation: {e}")
 
     # Optional MCMC: infer (M,R,D) given a measured kT (eV) with uncertainty
     if args.run_mcmc:
