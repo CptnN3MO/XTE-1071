@@ -28,6 +28,11 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+try:
+    import plotly.graph_objects as go
+except Exception:
+    go = None
+
 
 # ---------- constants ----------
 K_B_eV_per_K = 8.617333262e-5  # Boltzmann constant in eV/K
@@ -489,6 +494,87 @@ def plot_3d_grid(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV") -> N
     fig.savefig(outpath, dpi=250)
     plt.close(fig)
 
+def plot_3d_interactive(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV") -> None:
+    """Create an interactive Plotly HTML showing 3D lines per distance D."""
+    if go is None:
+        raise ImportError("plotly is required for interactive plotting. Install with `pip install plotly`.")
+
+    # Per-distance style mapping (matching static plot)
+    style_map = {
+        5.6: {"color": "blue", "dash": "dot"},
+        7.3: {"color": "green", "dash": "dash"},
+        8.8: {"color": "black", "dash": "solid"},
+    }
+
+    fig = go.Figure()
+
+    for D in sorted(df["D"].unique()):
+        sub = df[df["D"] == D].copy()
+        Mvals = np.sort(sub["M"].unique())
+        Rvals = np.sort(sub["R"].unique())
+        Z = np.empty((len(Mvals), len(Rvals)), dtype=float)
+        for i, m in enumerate(Mvals):
+            for j, r in enumerate(Rvals):
+                Z[i, j] = float(sub[(sub["M"] == m) & (sub["R"] == r)][zcol].iloc[0])
+
+        # lookup style
+        sty = None
+        for k, v in style_map.items():
+            if abs(float(D) - float(k)) < 1e-6:
+                sty = v
+                break
+        if sty is None:
+            sty = {"color": "steelblue", "dash": "solid"}
+
+        # add lines along R for each M
+        for i in range(len(Mvals)):
+            xs = np.full(len(Rvals), Mvals[i])
+            ys = Rvals
+            zs = Z[i, :]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=xs,
+                    y=ys,
+                    z=zs,
+                    mode="lines",
+                    line=dict(color=sty["color"], width=4, dash=sty["dash"]),
+                    hoverinfo="text",
+                    text=[f"D={D}, M={xs[0]}, R={y}, {zcol}={z:.3f}" for y, z in zip(ys, zs)],
+                    name=f"D={D}",
+                    showlegend=(i == 0),
+                )
+            )
+
+        # add lines along M for each R (no duplicate legend)
+        for j in range(len(Rvals)):
+            xs = Mvals
+            ys = np.full(len(Mvals), Rvals[j])
+            zs = Z[:, j]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=xs,
+                    y=ys,
+                    z=zs,
+                    mode="lines",
+                    line=dict(color=sty["color"], width=4, dash=sty["dash"]),
+                    hoverinfo="text",
+                    text=[f"D={D}, M={x}, R={ys[0]}, {zcol}={z:.3f}" for x, z in zip(xs, zs)],
+                    name=f"D={D}",
+                    showlegend=False,
+                )
+            )
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="Mass (Msun)",
+            yaxis_title="Radius (km)",
+            zaxis_title=zcol,
+        ),
+        legend=dict(title="Distance (kpc)"),
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+
+    fig.write_html(outpath, include_plotlyjs="cdn")
 
 # ---------- main ----------
 def main() -> None:
@@ -510,6 +596,7 @@ def main() -> None:
         default="grid",
         help="Posterior sampler: exact grid sampling (recommended) or discrete MH.",
     )
+    ap.add_argument("--interactive", action="store_true", help="Write an interactive Plotly HTML 3D plot to out/3d/")
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
@@ -589,6 +676,15 @@ def main() -> None:
     # 3D plot like Fig.4 style (wireframe per distance)
     plot_3d_grid(df, outplot_path,  zcol="kT_comb_eV")
     print(f"[OK] Wrote {outplot_path}")
+
+    # Optional interactive Plotly HTML
+    if args.interactive:
+        interactive_path = d3_dir / "grid_3d_interactive.html"
+        try:
+            plot_3d_interactive(df, interactive_path, zcol="kT_comb_eV")
+            print(f"[OK] Wrote {interactive_path}")
+        except ImportError as e:
+            print(f"[WARN] Could not create interactive plot: {e}")
 
     # Optional MCMC: infer (M,R,D) given a measured kT (eV) with uncertainty
     if args.run_mcmc:
