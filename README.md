@@ -1,12 +1,10 @@
 # XTE-1071 MCMC
-# NSCool
 
 Small workflow to:
 1) run an XSPEC grid over **(M, R, D)** for `tbabs*(nsatmos+pegpwrlw)`,
 2) parse XSPEC logs to build a `(M,R,D) -> kT` grid,
 3) (optionally) infer a posterior over **(M, R, D)** given an observed `kT` using a simple discrete Metropolis sampler.
 
-This repo is **not** the NSCool cooling code. It’s an XSPEC-grid + postprocessing helper.
 
 ---
 
