@@ -431,12 +431,23 @@ def plot_3d_grid(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV") -> N
     """
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-    fig = plt.figure()
+    # Save a compact CSV of the grid used for the 3D plot
+    datafile = outpath.parent / "grid_3d_data.csv"
+    df[["M", "R", "D", zcol]].to_csv(datafile, index=False)
+
+    fig = plt.figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection="3d")
 
+    # Per-distance style mapping (user request)
+    style_map = {
+        5.6: {"color": "blue", "linestyle": ":"},
+        7.3: {"color": "green", "linestyle": "--"},
+        8.8: {"color": "black", "linestyle": "-"},
+    }
+
+    # For visibility, plot mesh lines explicitly (rows + cols) with thicker lines
     for D in sorted(df["D"].unique()):
         sub = df[df["D"] == D].copy()
-        # Create mesh for wireframe
         Mvals = np.sort(sub["M"].unique())
         Rvals = np.sort(sub["R"].unique())
         Z = np.empty((len(Mvals), len(Rvals)), dtype=float)
@@ -444,16 +455,38 @@ def plot_3d_grid(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV") -> N
             for j, r in enumerate(Rvals):
                 Z[i, j] = float(sub[(sub["M"] == m) & (sub["R"] == r)][zcol].iloc[0])
 
-        MM, RR = np.meshgrid(Mvals, Rvals, indexing="ij")
-        ax.plot_wireframe(MM, RR, Z, linewidth=1)
+        # style lookup with tolerance for floating point representation
+        sty = None
+        for k, v in style_map.items():
+            if abs(float(D) - float(k)) < 1e-6:
+                sty = v
+                break
+        if sty is None:
+            sty = {"color": "C0", "linestyle": "-"}
+
+        color = sty["color"]
+        ls = sty["linestyle"]
+
+        # Draw lines along R for each M, and along M for each R
+        for i in range(len(Mvals)):
+            xs = np.full(len(Rvals), Mvals[i])
+            ys = Rvals
+            zs = Z[i, :]
+            ax.plot(xs, ys, zs, color=color, linestyle=ls, linewidth=2.0, alpha=0.95)
+
+        for j in range(len(Rvals)):
+            xs = Mvals
+            ys = np.full(len(Mvals), Rvals[j])
+            zs = Z[:, j]
+            ax.plot(xs, ys, zs, color=color, linestyle=ls, linewidth=2.0, alpha=0.95)
 
     ax.set_xlabel("Mass (Msun)")
     ax.set_ylabel("Radius (km)")
     ax.set_zlabel(f"{zcol}")
-    ax.set_title("Temperature grid (wireframes per distance)")
-
+    ax.set_title("Temperature grid (lines per distance)")
+    ax.grid(True)
     fig.tight_layout()
-    fig.savefig(outpath, dpi=200)
+    fig.savefig(outpath, dpi=250)
     plt.close(fig)
 
 
@@ -481,6 +514,13 @@ def main() -> None:
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+
+    # Create structured output subfolders
+    data_dir = outdir / "data"
+    d3_dir = outdir / "3d"
+    corner_dir = outdir / "corner"
+    for d in (data_dir, d3_dir, corner_dir):
+        d.mkdir(parents=True, exist_ok=True)
 
     indir = Path(args.indir)
     files = sorted(indir.glob(args.pattern))
@@ -530,8 +570,8 @@ def main() -> None:
 
         rows.append(row)
 
-    outcsv_path = outdir / args.outcsv
-    outplot_path = outdir / args.outplot
+    outcsv_path = data_dir / args.outcsv
+    outplot_path = d3_dir / args.outplot
     df = pd.DataFrame(rows).sort_values(["D", "M", "R"]).reset_index(drop=True)
         # ---- DEBUG/REPORT: print the exact grid used ----
     cols = ["M", "R", "D", "kT_comb_eV", "kT_comb_sigma_eV"]
@@ -544,11 +584,11 @@ def main() -> None:
     print("D unique:", sorted(df["D"].unique()))
     print("kT range (eV):", float(df["kT_comb_eV"].min()), "to", float(df["kT_comb_eV"].max()))
     df.to_csv(outcsv_path, index=False)
-    print(f"[OK] Wrote {outcsv_path.name} with {len(df)} grid points")
+    print(f"[OK] Wrote {outcsv_path} with {len(df)} grid points")
 
     # 3D plot like Fig.4 style (wireframe per distance)
     plot_3d_grid(df, outplot_path,  zcol="kT_comb_eV")
-    print(f"[OK] Wrote {outplot_path.name}")
+    print(f"[OK] Wrote {outplot_path}")
 
     # Optional MCMC: infer (M,R,D) given a measured kT (eV) with uncertainty
     if args.run_mcmc:
@@ -588,8 +628,8 @@ def main() -> None:
 
         # Save samples + quick corner-like summaries (no extra deps)
         samp_df = pd.DataFrame(samples, columns=["M", "R", "D"])
-        samp_df.to_csv(outdir / "mcmc_samples.csv", index=False)
-        print(f"[OK] Wrote {outdir / 'mcmc_samples.csv'}")
+        samp_df.to_csv(corner_dir / "mcmc_samples.csv", index=False)
+        print(f"[OK] Wrote {corner_dir / 'mcmc_samples.csv'}")
 
         for col in ["M", "R", "D"]:
             q16, q50, q84 = np.percentile(samp_df[col], [16, 50, 84])
@@ -604,9 +644,9 @@ def main() -> None:
         axes[2].hist(samp_df["D"], bins=40)
         axes[2].set_xlabel("D (kpc)")
         fig.tight_layout()
-        fig.savefig(outdir / "XTE_mcmc_hist.png", dpi=200)
+        fig.savefig(corner_dir / "XTE_mcmc_hist.png", dpi=200)
         plt.close(fig)
-        print(f"[OK] Wrote {outdir / 'XTE_mcmc_hist.png'}")
+        print(f"[OK] Wrote {corner_dir / 'XTE_mcmc_hist.png'}")
 
         # Corner plot (ONLY here!)
         # ---- MCMC diagnostics ----
@@ -652,8 +692,8 @@ def main() -> None:
             fill_contours=True,
             smooth=1.0,
         )
-        fig.savefig(outdir / "corner_plot.png", dpi=200)
-        print(f"[OK] Wrote {outdir / 'corner_plot.png'}")
+        fig.savefig(corner_dir / "corner_plot.png", dpi=200)
+        print(f"[OK] Wrote {corner_dir / 'corner_plot.png'}")
 
 
 if __name__ == "__main__":
