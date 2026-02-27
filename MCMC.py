@@ -705,19 +705,29 @@ def plot_3d_evolution(df: pd.DataFrame, outpath: Path, zcols: list, steps_per_tr
 
     fig.frames = plot_frames
     fig.update_layout(
-        updatemenus=[dict(type="buttons",
-                          showactive=False,
-                          y=1,
-                          x=1.1,
-                          xanchor="right",
-                          yanchor="top",
-                          pad=dict(t=0, r=10),
-                          buttons=[dict(label="Play",
-                                        method="animate",
-                                        args=[None, {"frame": {"duration": 100, "redraw": True}, "fromcurrent": True}]),
-                                   dict(label="Pause",
-                                        method="animate",
-                                        args:[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}])])],
+        updatemenus=[
+            dict(
+                type="buttons",
+                showactive=False,
+                y=1,
+                x=1.1,
+                xanchor="right",
+                yanchor="top",
+                pad=dict(t=0, r=10),
+                buttons=[
+                    dict(
+                        label="Play",
+                        method="animate",
+                        args=[None, {"frame": {"duration": 100, "redraw": True}, "fromcurrent": True}],
+                    ),
+                    dict(
+                        label="Pause",
+                        method="animate",
+                        args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}],
+                    ),
+                ],
+            )
+        ],
         scene=dict(
             xaxis=dict(title="Mass (Msun)", range=[xmin, xmax], autorange=False),
             yaxis=dict(title="Radius (km)", range=[ymin, ymax], autorange=False),
