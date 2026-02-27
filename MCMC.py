@@ -430,14 +430,14 @@ def metropolis_mcmc_discrete(
     return samples
 
 # ---------- plotting (Fig.4-like wireframes) ----------
-def plot_3d_grid(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV") -> None:
+def plot_3d_grid(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV", title: str = "Temperature grid") -> None:
     """
     Plot Teff (kT in eV) vs (M,R) for each D separately, similar to HETE2021 Fig. 4.
     """
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-    # Save a compact CSV of the grid used for the 3D plot
-    datafile = outpath.parent / "grid_3d_data.csv"
+    # Save a compact CSV of the grid used for this 3D plot (per-output)
+    datafile = outpath.parent / f"{outpath.stem}_data.csv"
     df[["M", "R", "D", zcol]].to_csv(datafile, index=False)
 
     fig = plt.figure(figsize=(10, 7))
@@ -488,13 +488,13 @@ def plot_3d_grid(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV") -> N
     ax.set_xlabel("Mass (Msun)")
     ax.set_ylabel("Radius (km)")
     ax.set_zlabel(f"{zcol}")
-    ax.set_title("Temperature grid (lines per distance)")
+    ax.set_title(title)
     ax.grid(True)
     fig.tight_layout()
     fig.savefig(outpath, dpi=250)
     plt.close(fig)
 
-def plot_3d_interactive(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV") -> None:
+def plot_3d_interactive(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV", title: str = "Temperature grid") -> None:
     """Create an interactive Plotly HTML showing 3D lines per distance D."""
     if go is None:
         raise ImportError("plotly is required for interactive plotting. Install with `pip install plotly`.")
@@ -570,6 +570,7 @@ def plot_3d_interactive(df: pd.DataFrame, outpath: Path, zcol: str = "kT_comb_eV
             yaxis_title="Radius (km)",
             zaxis_title=zcol,
         ),
+        title=title,
         legend=dict(title="Distance (kpc)"),
         margin=dict(l=0, r=0, t=40, b=0),
     )
@@ -673,18 +674,22 @@ def main() -> None:
     df.to_csv(outcsv_path, index=False)
     print(f"[OK] Wrote {outcsv_path} with {len(df)} grid points")
 
-    # 3D plot like Fig.4 style (wireframe per distance)
-    plot_3d_grid(df, outplot_path,  zcol="kT_comb_eV")
-    print(f"[OK] Wrote {outplot_path}")
+    # Produce per-spectrum 3D plots (one per group / spectrum)
+    for grp in [1, 2, 3, 4, 5]:
+        zcol = f"kT_g{grp}_eV"
+        title = f"XTE J1701-462 - spectrum {grp}"
+        outplot = d3_dir / f"grid_3d_spec{grp}.png"
+        plot_3d_grid(df, outplot, zcol=zcol, title=title)
+        print(f"[OK] Wrote {outplot}")
 
-    # Optional interactive Plotly HTML
-    if args.interactive:
-        interactive_path = d3_dir / "grid_3d_interactive.html"
-        try:
-            plot_3d_interactive(df, interactive_path, zcol="kT_comb_eV")
-            print(f"[OK] Wrote {interactive_path}")
-        except ImportError as e:
-            print(f"[WARN] Could not create interactive plot: {e}")
+        # Optional interactive Plotly HTML per-spectrum
+        if args.interactive:
+            interactive_path = d3_dir / f"grid_3d_spec{grp}_interactive.html"
+            try:
+                plot_3d_interactive(df, interactive_path, zcol=zcol, title=title)
+                print(f"[OK] Wrote {interactive_path}")
+            except ImportError as e:
+                print(f"[WARN] Could not create interactive plot: {e}")
 
     # Optional MCMC: infer (M,R,D) given a measured kT (eV) with uncertainty
     if args.run_mcmc:
