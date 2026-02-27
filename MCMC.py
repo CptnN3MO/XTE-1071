@@ -779,7 +779,7 @@ def analyze_cooling_rates(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_ylabel("Cooling rate (eV per spectrum index)")
     ax.set_title("Cooling-rate distribution by distance")
     fig.tight_layout()
-    outpng = outdir / "3d" / "cooling_rates_boxplot.png"
+    outpng = outdir / "cooling" / "cooling_rates_boxplot.png"
     fig.savefig(outpng, dpi=200)
     plt.close(fig)
 
@@ -1058,3 +1058,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# python MCMC.py --indir ../out/grid_logs --animate --anim-steps 30 --analyze-cooling --run-mcmc --teff-obs-ev 150 --sigma-ev 2
