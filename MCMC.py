@@ -617,6 +617,25 @@ def plot_3d_evolution(df: pd.DataFrame, outpath: Path, zcols: list, steps_per_tr
 
     # Build initial traces (use first frame)
     initZ = frames[0]
+
+    # Compute global axis ranges so axes remain static during animation
+    all_z_min = min([Z.min() for Z in Zs])
+    all_z_max = max([Z.max() for Z in Zs])
+    zpad = 0.05 * (all_z_max - all_z_min) if all_z_max > all_z_min else 0.1 * all_z_max
+    zmin = all_z_min - zpad
+    zmax = all_z_max + zpad
+
+    xmin = float(Mvals[0])
+    xmax = float(Mvals[-1])
+    xpad = 0.02 * (xmax - xmin) if xmax > xmin else 0.1 * max(1.0, xmax)
+    xmin -= xpad
+    xmax += xpad
+
+    ymin = float(Rvals[0])
+    ymax = float(Rvals[-1])
+    ypad = 0.02 * (ymax - ymin) if ymax > ymin else 0.1 * max(1.0, ymax)
+    ymin -= ypad
+    ymax += ypad
     traces = []
     trace_meta = []
     style_map = {
@@ -698,8 +717,12 @@ def plot_3d_evolution(df: pd.DataFrame, outpath: Path, zcols: list, steps_per_tr
                                         args=[None, {"frame": {"duration": 100, "redraw": True}, "fromcurrent": True}]),
                                    dict(label="Pause",
                                         method="animate",
-                                        args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}])])],
-        scene=dict(xaxis_title="Mass (Msun)", yaxis_title="Radius (km)", zaxis_title=zcols[0]),
+                                        args:[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}])])],
+        scene=dict(
+            xaxis=dict(title="Mass (Msun)", range=[xmin, xmax], autorange=False),
+            yaxis=dict(title="Radius (km)", range=[ymin, ymax], autorange=False),
+            zaxis=dict(title=zcols[0], range=[zmin, zmax], autorange=False),
+        ),
         title=title,
         margin=dict(l=0, r=0, t=40, b=0),
     )
