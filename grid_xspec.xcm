@@ -1,0 +1,62 @@
+query yes
+
+# ---- grid definitions ----
+set masses {1.2 1.4 1.6 1.8 2.0 2.2}
+set radii  {10 12 14 16}
+set dists  {5.6 7.3 8.8}
+
+# ---- create output directory ----
+set outdir "grid_logs"
+file mkdir $outdir
+
+# ---- load data+model once ----
+@base_xspec.xcm
+
+# ---- loop ----
+foreach M $masses {
+  foreach R $radii {
+    foreach D $dists {
+
+      # Reset parameters that were frozen previously
+      thaw 10 20 30 40 50
+
+      # Filename tag (avoids dots in filename)
+      set Mi [expr {int(round($M*10))}]
+      set Di [expr {int(round($D*10))}]
+      set tag [format "M%02d_R%02d_D%02d" $Mi $R $Di]
+
+      # Full path inside folder
+      set fn  [format "%s/%s.txt" $outdir $tag]
+
+      puts "=== Running grid point: M=$M Msun, R=$R km, D=$D kpc ==="
+
+      # Set NS parameters
+      newpar 3 $M -1
+      newpar 4 $R -1
+      newpar 5 $D -1
+
+      # ---- your workflow ----
+      fit
+      untie 12 22 32 42
+      untie 10 20 30 40 50
+      fit
+      freeze 10 20 30 40 50
+      renorm
+      
+      # Start logging
+      log $fn
+      
+      fit
+      uncer 1.0 2 12 22 32 42
+
+      show free
+      flux 0.5 10 err 100 90
+      show frozen
+
+      # Stop logging
+      log none
+    }
+  }
+}
+
+quit
