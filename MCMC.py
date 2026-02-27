@@ -20,10 +20,9 @@ from __future__ import annotations
 import argparse
 import math
 import re
-import corner
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -52,8 +51,7 @@ SHOWFREE_ROW_RE = re.compile(
 
 TARGET_PARS = [2, 12, 22, 32, 42]
 
-OUTDIR = Path("/home/cptnn3mo/Desktop/Neutron_stars/XTE_1701-462/out")
-OUTDIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_OUTDIR = Path("out")
 
 
 @dataclass
@@ -231,6 +229,41 @@ def log_likelihood(teff_obs: float, sigma_obs: float, teff_model: float) -> floa
     return -0.5 * ((teff_obs - teff_model) / sigma_obs) ** 2 - math.log(sigma_obs * math.sqrt(2 * math.pi))
 
 
+def compute_grid_posterior_weights(
+    teff_obs: float,
+    sigma_obs: float,
+    grid: np.ndarray,
+) -> np.ndarray:
+    """Compute normalized posterior weights over a discrete (M,R,D) grid."""
+    logw = -0.5 * ((teff_obs - grid) / sigma_obs) ** 2
+    logw -= np.nanmax(logw)  # numerical stability
+    w = np.exp(logw)
+    total = float(np.sum(w))
+    if not np.isfinite(total) or total <= 0:
+        raise RuntimeError("Posterior weights are invalid; check teff_obs/sigma/grid values.")
+    return w / total
+
+
+def sample_from_grid_posterior(
+    weights: np.ndarray,
+    Mvals: np.ndarray,
+    Rvals: np.ndarray,
+    Dvals: np.ndarray,
+    nsteps: int,
+    burn: int,
+    seed: int,
+) -> np.ndarray:
+    """Draw independent samples from a discrete posterior defined on the grid."""
+    if burn >= nsteps:
+        raise ValueError("burn must be smaller than nsteps")
+
+    rng = np.random.default_rng(seed)
+    flat_w = weights.ravel()
+    draw_idx = rng.choice(flat_w.size, size=nsteps - burn, p=flat_w)
+    ii, jj, kk = np.unravel_index(draw_idx, weights.shape)
+    return np.column_stack([Mvals[ii], Rvals[jj], Dvals[kk]])
+
+
 def metropolis_mcmc(
     teff_obs: float,
     sigma_obs: float,
@@ -310,6 +343,32 @@ def metropolis_mcmc_discrete(
         tm = teff_at(ii, jj, kk)
         return log_likelihood(teff_obs, sigma_obs, tm)
 
+    def proposal_log_prob(a: Tuple[int, int, int], b: Tuple[int, int, int]) -> float:
+        """q(b|a) for the discrete proposal used below."""
+        ai, aj, ak = a
+        bi, bj, bk = b
+
+        # one third chance to choose each axis
+        if aj == bj and ak == bk and abs(ai - bi) == 1:
+            if ai in (0, len(Mvals) - 1):
+                p = 1.0 / 3.0
+            else:
+                p = 1.0 / 6.0
+            return math.log(p)
+
+        if ai == bi and ak == bk and abs(aj - bj) == 1:
+            if aj in (0, len(Rvals) - 1):
+                p = 1.0 / 3.0
+            else:
+                p = 1.0 / 6.0
+            return math.log(p)
+
+        if ai == bi and aj == bj and bk != ak:
+            p = (1.0 / 3.0) * (1.0 / (len(Dvals) - 1))
+            return math.log(p)
+
+        return -np.inf
+
     cur = log_post(i, j, k)
     samples = np.zeros((nsteps, 3), dtype=float)
     accept = 0
@@ -349,7 +408,11 @@ def metropolis_mcmc_discrete(
         proposals += 1
         prop = log_post(ip, jp, kp)
 
-        if np.isfinite(prop) and (math.log(rng.random()) < (prop - cur)):
+        fwd = proposal_log_prob((i, j, k), (ip, jp, kp))
+        rev = proposal_log_prob((ip, jp, kp), (i, j, k))
+        log_alpha = prop - cur + rev - fwd
+
+        if np.isfinite(prop) and np.isfinite(log_alpha) and (math.log(rng.random()) < log_alpha):
             i, j, k = ip, jp, kp
             cur = prop
             accept += 1
@@ -401,13 +464,23 @@ def main() -> None:
     ap.add_argument("--pattern", type=str, default="M*_R*_D*.txt", help="Glob pattern for log files")
     ap.add_argument("--outcsv", type=str, default="grid_temps.csv", help="Output CSV")
     ap.add_argument("--outplot", type=str, default="grid_3d.png", help="Output 3D plot")
+    ap.add_argument("--outdir", type=str, default=str(DEFAULT_OUTDIR), help="Output folder")
     ap.add_argument("--run-mcmc", action="store_true", help="Run MCMC over (M,R,D)")
     ap.add_argument("--teff-obs-ev", type=float, default=None, help="Observed kT (eV) for MCMC")
     ap.add_argument("--sigma-ev", type=float, default=None, help="1-sigma uncertainty on observed kT (eV) for MCMC")
     ap.add_argument("--mcmc-steps", type=int, default=30000)
     ap.add_argument("--mcmc-burn", type=int, default=8000)
     ap.add_argument("--mcmc-seed", type=int, default=0)
+    ap.add_argument(
+        "--sampler",
+        choices=["grid", "mh-discrete"],
+        default="grid",
+        help="Posterior sampler: exact grid sampling (recommended) or discrete MH.",
+    )
     args = ap.parse_args()
+
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
 
     indir = Path(args.indir)
     files = sorted(indir.glob(args.pattern))
@@ -457,8 +530,8 @@ def main() -> None:
 
         rows.append(row)
 
-    outcsv_path = OUTDIR / args.outcsv
-    outplot_path = OUTDIR / args.outplot
+    outcsv_path = outdir / args.outcsv
+    outplot_path = outdir / args.outplot
     df = pd.DataFrame(rows).sort_values(["D", "M", "R"]).reset_index(drop=True)
         # ---- DEBUG/REPORT: print the exact grid used ----
     cols = ["M", "R", "D", "kT_comb_eV", "kT_comb_sigma_eV"]
@@ -484,19 +557,39 @@ def main() -> None:
 
         Mvals, Rvals, Dvals, grid = build_grid(df, "kT_comb_eV")
 
-        samples = metropolis_mcmc_discrete(
-            teff_obs=float(args.teff_obs_ev),
-            sigma_obs=float(args.sigma_ev),
-            Mvals=Mvals, Rvals=Rvals, Dvals=Dvals, grid=grid,
-            nsteps=args.mcmc_steps,
-            burn=args.mcmc_burn,
-            seed=args.mcmc_seed,
-        )
+        if args.sampler == "grid":
+            weights = compute_grid_posterior_weights(
+                teff_obs=float(args.teff_obs_ev),
+                sigma_obs=float(args.sigma_ev),
+                grid=grid,
+            )
+            samples = sample_from_grid_posterior(
+                weights=weights,
+                Mvals=Mvals,
+                Rvals=Rvals,
+                Dvals=Dvals,
+                nsteps=args.mcmc_steps,
+                burn=args.mcmc_burn,
+                seed=args.mcmc_seed,
+            )
+            print("[Sampler] drew independent samples from exact discrete grid posterior")
+        else:
+            samples = metropolis_mcmc_discrete(
+                teff_obs=float(args.teff_obs_ev),
+                sigma_obs=float(args.sigma_ev),
+                Mvals=Mvals,
+                Rvals=Rvals,
+                Dvals=Dvals,
+                grid=grid,
+                nsteps=args.mcmc_steps,
+                burn=args.mcmc_burn,
+                seed=args.mcmc_seed,
+            )
 
         # Save samples + quick corner-like summaries (no extra deps)
         samp_df = pd.DataFrame(samples, columns=["M", "R", "D"])
-        samp_df.to_csv(OUTDIR / "mcmc_samples.csv", index=False)
-        print(f"[OK] Wrote {OUTDIR / 'mcmc_samples.csv'}")
+        samp_df.to_csv(outdir / "mcmc_samples.csv", index=False)
+        print(f"[OK] Wrote {outdir / 'mcmc_samples.csv'}")
 
         for col in ["M", "R", "D"]:
             q16, q50, q84 = np.percentile(samp_df[col], [16, 50, 84])
@@ -511,13 +604,9 @@ def main() -> None:
         axes[2].hist(samp_df["D"], bins=40)
         axes[2].set_xlabel("D (kpc)")
         fig.tight_layout()
-        fig.savefig(OUTDIR / "XTE_mcmc_hist.png", dpi=200)
+        fig.savefig(outdir / "XTE_mcmc_hist.png", dpi=200)
         plt.close(fig)
-        print(f"[OK] Wrote {OUTDIR / 'XTE_mcmc_hist.png'}")
-
-        samp_df = pd.DataFrame(samples, columns=["M", "R", "D"])
-        samp_df.to_csv(OUTDIR / "mcmc_samples.csv", index=False)
-        print(f"[OK] Wrote {OUTDIR / 'mcmc_samples.csv'}")
+        print(f"[OK] Wrote {outdir / 'XTE_mcmc_hist.png'}")
 
         # Corner plot (ONLY here!)
         # ---- MCMC diagnostics ----
@@ -546,6 +635,12 @@ def main() -> None:
             (5.6, 8.8),   # D
         ]
 
+        try:
+            import corner
+        except ImportError:
+            print("[WARN] corner is not installed; skipping corner_plot.png")
+            return
+
         fig = corner.corner(
             samp_df[["M", "R", "D"]],
             labels=[r"$M\ (M_\odot)$", r"$R\ (\mathrm{km})$", r"$D\ (\mathrm{kpc})$"],
@@ -557,8 +652,8 @@ def main() -> None:
             fill_contours=True,
             smooth=1.0,
         )
-        fig.savefig(OUTDIR / "corner_plot.png", dpi=200)
-        print(f"[OK] Wrote {OUTDIR / 'corner_plot.png'}")
+        fig.savefig(outdir / "corner_plot.png", dpi=200)
+        print(f"[OK] Wrote {outdir / 'corner_plot.png'}")
 
 
 if __name__ == "__main__":
